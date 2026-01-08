@@ -3,6 +3,7 @@ import math
 import numpy as np
 import pandas as pd
 from scipy import special as sc 
+import scipy.optimize as opt
 
 
 def conv_eng_si(value,
@@ -87,13 +88,14 @@ def pws_vw_ira(
 
    return pws
 
+
 #----------------------------------------------------------------------------
 
 def pws_vw_bcr(
     table_p,
     table_d,
     k:float,
-    N_terms:int=15
+    N_terms:int=50
 
 ):
   
@@ -109,7 +111,7 @@ def pws_vw_bcr(
    R_b=table_p.loc[table_p['Variable'] == 'r_e', 'Value'].iloc[0] 
   
    dt=table_d["delta_t"]
-   t_dt=table_d["t_dt"]
+   tdt=table_d["tdt"]
 
    X_n = sc.jn_zeros(1, N_terms)
    X_n_col = X_n[:, np.newaxis]
@@ -129,17 +131,212 @@ def pws_vw_bcr(
 
         S_t_sum_array = np.sum(C_n_col * Exp_matrix, axis=0)
 
-        Yt= 4*k*tf/(por*mu*c_t*R_b**2) + r**2/R_b**2 -2*np.log(r/R_b) -3/2 -2*S_t_sum_array
+        Yt= 4*k*tf/(por*mu*c_t*R_b**2) + r**2/R_b**2 -2*np.log(r/R_b) -3/2 -4*S_t_sum_array
         return Yt
    
-   tdt=t+dt
    tdt_np = tdt.values # or tdt.to_numpy()
    dt_np = dt.values # or dt.to_numpy()
    pws= pi - q*mu*B/(4*np.pi*k*h)*(p_Yt(tdt_np) - p_Yt(dt_np))
    return pws
 
+#--------------------------------------------------------------------------------------------------
+
+def pws_vw_bfcr(
+    table_p,
+    table_d,
+    k:float,
+    N_terms:int=50
+
+):
+  
+   h=table_p.loc[table_p['Variable'] == 'h', 'Value'].iloc[0]
+   pi=table_p.loc[table_p['Variable'] == 'p_i', 'Value'].iloc[0]
+   q=table_p.loc[table_p['Variable'] == 'q', 'Value'].iloc[0]
+   B=table_p.loc[table_p['Variable'] == 'B', 'Value'].iloc[0]
+   mu=table_p.loc[table_p['Variable'] == 'mu', 'Value'].iloc[0]
+   t=table_p.loc[table_p['Variable'] == 't', 'Value'].iloc[0]
+   por=table_p.loc[table_p['Variable'] == 'por', 'Value'].iloc[0]
+   c_t=table_p.loc[table_p['Variable'] == 'c_t', 'Value'].iloc[0] 
+   r=table_p.loc[table_p['Variable'] == 'r_w', 'Value'].iloc[0] 
+   R_b=table_p.loc[table_p['Variable'] == 'r_e', 'Value'].iloc[0] 
+  
+   dt=table_d["delta_t"]
+   tdt=table_d["tdt"]
+
+   def characteristic_eq(Xn, rde):
+        J1_Xn = sc.jn(1, Xn)
+        Y1_Xn_rde = sc.yn(1, Xn * rde)
+        Y1_Xn = sc.yn(1, Xn)
+        J1_Xn_rde = sc.jn(1, Xn * rde)
+        
+        return Y1_Xn * J1_Xn_rde -J1_Xn * Y1_Xn_rde
+  
+   rde = R_b / r 
+   X_n = np.zeros(N_terms)
+   root_counter = 0
+   
+   step_est = np.pi / (rde - 1)
+   search_start = step_est * 0.1 
+   search_step = step_est * 0.8 
+
+   while root_counter < N_terms:
+    a = search_start
+    b = search_start + search_step
+
+    if characteristic_eq(a, rde) * characteristic_eq(b, rde) < 0:
+        try:
+            result = opt.root_scalar(characteristic_eq, args=(rde,), bracket=[a, b], method='brentq')
+            
+            if result.converged:
+                X_n[root_counter] = result.root
+                root_counter += 1
+                search_start = result.root + step_est * 0.1 
+            else:
+                search_start = b
+                
+        except ValueError:
+            search_start = b
+            
+    else:
+        search_start = b
+
+    if search_start > N_terms * np.pi: # Heuristic limit
+        print(f"Warning: Could not find all {N_terms} roots. Found {root_counter}.")
+        X_n = X_n[0:root_counter] 
+        break
+
+    if search_start > 1000: break
+
+   X_n_col = X_n[:, np.newaxis]
+      
+   alpha= k / (por * mu * c_t * (r**2))
+   alpha_m_col = alpha * (X_n_col**2)
+    
+   J1_rb = sc.jn(1, X_n * R_b/r)
+   J1_X = sc.jn(1, X_n)
+
+   Denominator = (X_n**2) * ((J1_rb**2)-(J1_X**2))
+   C_n_col = (J1_rb**2 / Denominator)[:, np.newaxis]
+
+   def p_Yt(tf):
+
+        exp_argument_matrix = -1 * alpha_m_col * tf
+        Exp_matrix = np.exp(exp_argument_matrix)
+
+        term_1= 4*( alpha* tf + 1/4)/(rde**2 -1)
+        term_2= (3*rde**4-4*rde**4*np.log(rde)-2*rde**2-1) /(2*(rde**2-1)**2) 
+        S_t_sum_array = np.sum(C_n_col * Exp_matrix, axis=0)
+
+        Yt= term_1 - term_2 + 4*S_t_sum_array
+
+        return Yt
+   
+   tdt_np = tdt.values # or tdt.to_numpy()
+   dt_np = dt.values # or dt.to_numpy()
+   pws= pi - q*mu*B/(4*np.pi*k*h)*(p_Yt(tdt_np) - p_Yt(dt_np))
+   return pws
+
+
 #----------------------------------------------------------------------------------------------------
 
+def pws_vw_bpcr(
+    table_p,
+    table_d,
+    k:float,
+    N_terms:int=50
+
+):
+  
+   h=table_p.loc[table_p['Variable'] == 'h', 'Value'].iloc[0]
+   pi=table_p.loc[table_p['Variable'] == 'p_i', 'Value'].iloc[0]
+   q=table_p.loc[table_p['Variable'] == 'q', 'Value'].iloc[0]
+   B=table_p.loc[table_p['Variable'] == 'B', 'Value'].iloc[0]
+   mu=table_p.loc[table_p['Variable'] == 'mu', 'Value'].iloc[0]
+   t=table_p.loc[table_p['Variable'] == 't', 'Value'].iloc[0]
+   por=table_p.loc[table_p['Variable'] == 'por', 'Value'].iloc[0]
+   c_t=table_p.loc[table_p['Variable'] == 'c_t', 'Value'].iloc[0] 
+   r=table_p.loc[table_p['Variable'] == 'r_w', 'Value'].iloc[0] 
+   R_b=table_p.loc[table_p['Variable'] == 'r_e', 'Value'].iloc[0] 
+  
+   dt=table_d["delta_t"]
+   #tdt=table_d["tdt"]
+   tdt= dt+t
+
+   def characteristic_eq(Xm, rde):
+        J1_Xm = sc.jn(1, Xm)
+        Y0_Xm_rde = sc.yn(0, Xm * rde)
+        Y1_Xm = sc.yn(1, Xm)
+        J0_Xm_rde = sc.jn(0, Xm * rde)
+        
+        return J1_Xm * Y0_Xm_rde - Y1_Xm * J0_Xm_rde
+
+   rde = R_b / r 
+   X_m = np.zeros(N_terms)
+
+   root_counter = 0
+   
+   step_est = np.pi / (rde - 1)
+   search_start = step_est * 0.1 
+   search_step = step_est * 0.8 
+
+   while root_counter < N_terms:
+    a = search_start
+    b = search_start + search_step
+
+    if characteristic_eq(a, rde) * characteristic_eq(b, rde) < 0:
+        try:
+            result = opt.root_scalar(characteristic_eq, args=(rde,), bracket=[a, b], method='brentq')
+            
+            if result.converged:
+                X_m[root_counter] = result.root
+                root_counter += 1
+                search_start = result.root + step_est * 0.1  
+            else:
+                search_start = b
+                
+        except ValueError:
+            search_start = b
+            
+    else:
+        search_start = b
+
+    if search_start > N_terms * np.pi: # Heuristic limit
+        print(f"Warning: Could not find all {N_terms} roots. Found {root_counter}.")
+        X_m = X_m[0:root_counter] 
+        break
+    if search_start > 1000: break
+
+   X_m_col = X_m[:, np.newaxis]
+      
+   alpha= k / (por * mu * c_t * (r**2))
+   alpha_m_col = alpha * (X_m_col**2)
+    
+   J0_rb = sc.jn(0, X_m * R_b/r)
+   J1_X = sc.jn(1, X_m)
+
+   Denominator = (X_m**2) * ((J1_X**2)-(J0_rb**2))
+   C_n_col = (J0_rb**2 / Denominator)[:, np.newaxis]
+
+   def p_Yt(tf):
+
+        exp_argument_matrix = -1 * alpha_m_col * tf
+        Exp_matrix = np.exp(exp_argument_matrix)
+
+        S_t_sum_array = np.sum(C_n_col * Exp_matrix, axis=0)
+
+        Yt= 2*np.log(R_b/r) -4*S_t_sum_array
+
+        return Yt
+   
+   tdt_np = tdt.values # or tdt.to_numpy()
+   dt_np = dt.values # or dt.to_numpy()
+   pws= pi - q*mu*B/(4*np.pi*k*h)*(p_Yt(tdt_np) - p_Yt(dt_np))
+   return pws
+
+#------------------------------------------------------------------------------------------------------
+
+
+#------------------------------------------------------------------------------------------------------
 
 def pwd_vf_ir(
     table_p,

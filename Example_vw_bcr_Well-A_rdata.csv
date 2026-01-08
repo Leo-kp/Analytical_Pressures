@@ -1,0 +1,12 @@
+Variable,Value,Unit
+p_i,3705,psi
+A,121.8845635,acres
+r_w,0.25,ft
+r_e,1300,ft
+por,0.15,vol_fraction
+h,120,ft
+c_t,1.53E-05,psi-1
+mu,0.33,cP
+B,1.69,RB/STB
+q,115,STB/D
+t,300,h

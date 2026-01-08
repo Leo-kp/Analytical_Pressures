@@ -1,0 +1,12 @@
+Variable,Value,Unit
+p_i,441,psi
+A,160,acres
+r_w,0.33,ft
+r_e,1320,ft
+por,0.23,vol_fraction
+h,130,ft
+c_t,1.50E-05,psi-1
+mu,65,cP
+B,1.2,RB/STB
+q,295,STB/D
+t,8760,h
